@@ -99,7 +99,7 @@ check('active outline follows scroll', (await page.locator('.mdl-outline .mdl-ol
 await page.locator('.mdl-tab').first().click();
 await page.waitForSelector('.mdl-folder .mdl-row');
 const names = await page.locator('.mdl-folder .mdl-row-name').allInnerTexts();
-check('folder tree lists dirs + markdown only', JSON.stringify(names) === JSON.stringify(['sub', 'notes.txt', 'other.md', 'sample.md']), names.join(','));
+check('folder tree lists dirs + markdown only', JSON.stringify(names) === JSON.stringify(['sub', 'notes.txt', 'other.md', 'refs.md', 'sample.md']), names.join(','));
 check('current file highlighted', (await page.locator('.mdl-folder .mdl-row.active').innerText()).trim() === 'sample.md');
 await page.locator('.mdl-folder .mdl-row.dir').click();
 await page.waitForSelector('.mdl-folder .mdl-children .mdl-row');
@@ -188,8 +188,43 @@ await page.waitForSelector('article em');
 check('.txt rendered as markdown', true);
 await page.goto(pathToFileURL(docs).href + '/');
 await page.waitForSelector('.mdl-dir-entry');
-check('folder page lists entries', (await page.locator('.mdl-dir-entry .mdl-row-name').allInnerTexts()).join() === 'sub,notes.txt,other.md,sample.md');
+check('folder page lists entries', (await page.locator('.mdl-dir-entry .mdl-row-name').allInnerTexts()).join() === 'sub,notes.txt,other.md,refs.md,sample.md');
 await page.screenshot({ path: path.join(outDir, 'folder-page.png') });
+
+// editing a document with blocks the editor drops (link definitions, comments)
+await page.goto(fileUrl('refs.md'));
+await page.waitForSelector('article h1');
+const cdp2 = await ctx.newCDPSession(page);
+const worlds2 = [];
+cdp2.on('Runtime.executionContextCreated', (e) => worlds2.push(e.context));
+await cdp2.send('Runtime.enable');
+const world2 = worlds2.find((c) => c.origin.startsWith('chrome-extension://'));
+const inExt = (expression) => cdp2.send('Runtime.evaluate', { contextId: world2.id, expression, awaitPromise: true });
+await inExt(`window.showSaveFilePicker = async () => ({ name: 'refs.md', createWritable: async () => ({ write: async (t) => { document.documentElement.dataset.written = t; }, close: async () => {} }) })`);
+const refsOriginal = await (await import('node:fs/promises')).readFile(path.join(docs, 'refs.md'), 'utf8');
+await page.locator('.mdl-edit-btn').click();
+await page.waitForSelector('.mdl-editor .ProseMirror h1');
+await page.keyboard.press('Control+s');
+await page.waitForFunction(() => document.documentElement.dataset.written !== undefined);
+check('refs: untouched save is byte-identical', (await page.evaluate(() => document.documentElement.dataset.written)) === refsOriginal);
+for (const text of ['첫 문단', '둘째 문단']) {
+  await page.locator('.mdl-editor .ProseMirror p', { hasText: text }).click();
+  await page.keyboard.press('End');
+  await page.keyboard.type(' 수정');
+}
+await page.waitForFunction(() => (document.documentElement.dataset.written || '').includes('둘째 문단. 수정'), null, { timeout: 5000 }).catch(() => {});
+const refsWritten = await page.evaluate(() => document.documentElement.dataset.written);
+check('refs: definition + comment survive edits around them', refsWritten.includes('[ref]: https://example.com "제목"') && refsWritten.includes('<!-- 주석 -->'), JSON.stringify(refsWritten));
+check('refs: untouched list keeps its * bullets', refsWritten.includes('* 별표 목록\n* 유지'));
+await page.locator('.mdl-edit-btn').click();
+await page.waitForSelector('article.markdown-body h1');
+
+// editor start failure must fall back to the rendered view, not a blank page
+await inExt(`globalThis.__mdlEditor.create = async () => { throw new Error('boom'); }`);
+await page.locator('.mdl-edit-btn').click();
+await page.waitForSelector('article .mdl-notice.error');
+check('editor failure falls back to view with a message', (await page.locator('article h1').isVisible()) && (await page.locator('.mdl-notice.error code').innerText()).includes('boom'));
+await page.evaluate(() => { window.onbeforeunload = null; });
 
 // zen + disabled
 await setSettings({ zen: true });

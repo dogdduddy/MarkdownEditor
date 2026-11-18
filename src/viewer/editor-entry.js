@@ -1,5 +1,5 @@
 import { Crepe } from '@milkdown/crepe';
-import { remarkCtx, remarkStringifyOptionsCtx } from '@milkdown/kit/core';
+import { parserCtx, remarkCtx, remarkStringifyOptionsCtx, serializerCtx } from '@milkdown/kit/core';
 import { remarkGFMPlugin } from '@milkdown/kit/preset/gfm';
 import { $remark } from '@milkdown/kit/utils';
 import remarkCjkFriendly from 'remark-cjk-friendly';
@@ -51,14 +51,40 @@ globalThis.__mdlEditor = {
     // editor does not know ([[TOC]], > [!NOTE], *[abbr]: ...). Instead the file
     // is cut into top-level blocks; blocks the user did not touch are written
     // back byte-for-byte from the original, only edited ones are serialised.
-    const remark = crepe.editor.ctx.get(remarkCtx);
+    const { ctx } = crepe.editor;
+    const remark = ctx.get(remarkCtx);
+    const toDoc = ctx.get(parserCtx);
+    const toMarkdown = ctx.get(serializerCtx);
     const spans = (md) =>
       remark
         .parse(md)
         .children.filter((n) => n.position)
         .map((n) => [n.position.start.offset, n.position.end.offset]);
 
-    const orig = spans(markdown);
+    // Some blocks never reach the editor (link reference definitions, HTML
+    // comments...). They are carried along with the gap before the next block.
+    const vanishes = (text) => {
+      try {
+        return toMarkdown(toDoc(text)).trim() === '';
+      } catch {
+        return false;
+      }
+    };
+    const all = spans(markdown);
+    const hidden = []; // hidden[k]: source of vanished blocks sitting before visible block k
+    const orig = [];
+    let pending = [];
+    for (const span of all) {
+      if (vanishes(markdown.slice(span[0], span[1]))) {
+        pending.push(markdown.slice(span[0], span[1]));
+      } else {
+        hidden.push(pending);
+        pending = [];
+        orig.push(span);
+      }
+    }
+    hidden.push(pending);
+
     const initial = crepe.getMarkdown();
     const initialSpans = spans(initial);
     let pristine = null;
@@ -76,22 +102,40 @@ globalThis.__mdlEditor = {
       if (!pristine) return cur;
       const queues = new Map([...pristine].map(([k, v]) => [k, [...v]]));
       const blocks = spans(cur);
-      if (!blocks.length) return '';
+      const emitted = new Set(); // gaps written verbatim (their hidden blocks included)
+      const last = orig.length - 1;
       let out = '';
       let prev = -2;
       blocks.forEach(([s, e], n) => {
         const text = cur.slice(s, e);
         const queue = queues.get(text);
         const i = queue && queue.length ? queue.shift() : -2;
-        if (n === 0) out += i === 0 ? markdown.slice(0, orig[0][0]) : '';
-        else out += i >= 0 && i === prev + 1 ? markdown.slice(orig[prev][1], orig[i][0]) : '\n\n';
+        const verbatim = i >= 0 && (n === 0 ? i === 0 : i === prev + 1);
+        if (verbatim) {
+          out += markdown.slice(i === 0 ? 0 : orig[i - 1][1], orig[i][0]);
+          emitted.add(i);
+        } else {
+          if (n > 0) out += '\n\n';
+          if (i >= 0 && hidden[i].length) {
+            out += `${hidden[i].join('\n\n')}\n\n`;
+            emitted.add(i);
+          }
+        }
         out += i >= 0 ? markdown.slice(orig[i][0], orig[i][1]) : text;
         prev = i;
       });
-      out += prev === orig.length - 1 ? markdown.slice(orig[prev][1]) : '\n';
+      if (blocks.length && prev === last) {
+        out += markdown.slice(orig[last][1]);
+        emitted.add(last + 1);
+      } else if (blocks.length) {
+        out += '\n';
+      }
+      // Hidden blocks whose neighbours were edited or removed still get written.
+      const lost = hidden.flatMap((list, k) => (emitted.has(k) ? [] : list));
+      if (lost.length) out += `${out && !out.endsWith('\n\n') ? (out.endsWith('\n') ? '\n' : '\n\n') : ''}${lost.join('\n\n')}\n`;
       return out;
     }
 
-    return { getMarkdown, destroy: () => crepe.destroy() };
+    return { getMarkdown, lossless: !!pristine, destroy: () => crepe.destroy() };
   },
 };

@@ -551,3 +551,7 @@ html { scroll-padding-top: 24px; }
 .mdl-editor .milkdown .ProseMirror p { padding: 0.35em 0; line-height: 1.75; }
 .mdl-editor .milkdown .ProseMirror strong { color: var(--text-strong); }
 .mdl-editor .milkdown .ProseMirror a { color: var(--link); }
+.mdl-notice.error { border-color: #e5534b; background: color-mix(in srgb, #e5534b 10%, transparent); }
+.mdl-notice.error code { margin-top: 4px; font-family: var(--font-mono); font-size: 12px; white-space: pre-wrap; word-break: break-all; }
+/* While the editor is being built it stays out of sight but keeps its layout. */
+.mdl-editor[hidden] { display: block !important; position: absolute; visibility: hidden; height: 0; overflow: hidden; padding: 0; }

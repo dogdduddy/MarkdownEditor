@@ -715,7 +715,8 @@ const clean = (s) => s.replace(/^﻿/, '');
     document.documentElement.classList.toggle('mdl-dirty', dirty);
     let text = message;
     if (!text) {
-      if (dirty) text = t('edit.dirty');
+      if (editor && !editor.lossless) text = t('edit.lossy');
+      else if (dirty) text = t('edit.dirty');
       else if (fileHandle) text = `${t('edit.saved')} · ${fileHandle.name}`;
       else text = t(canPick ? 'edit.pickHint' : 'edit.downloadHint');
     }
@@ -735,7 +736,7 @@ const clean = (s) => s.replace(/^﻿/, '');
     updateStatus();
     clearTimeout(outlineTimer);
     outlineTimer = setTimeout(editorHeadings, 300);
-    if (settings.autoSave && fileHandle) {
+    if (settings.autoSave && fileHandle && editor && editor.lossless) {
       clearTimeout(saveTimer);
       saveTimer = setTimeout(() => save(false), 1000);
     }
@@ -764,46 +765,86 @@ const clean = (s) => s.replace(/^﻿/, '');
   // Remember roughly where the reader was when switching between modes.
   const headingIndex = () => Math.max(0, outlineItems.findIndex((item) => item.row === activeRow));
 
+  function leaveEditUi() {
+    mode = 'view';
+    editor = null;
+    document.documentElement.classList.remove('mdl-editing');
+    editBtn.classList.remove('active');
+    editorHost.hidden = true;
+    editorHost.replaceChildren();
+    article.hidden = false;
+  }
+
+  // If the editor cannot start, never leave the reader with an empty page:
+  // go back to the rendered view and say what went wrong.
+  function editFailed(error) {
+    leaveEditUi();
+    const detail = String((error && (error.stack || error.message)) || error).split('\n').slice(0, 4).join('\n');
+    console.error('[MD Lens] editor failed', error);
+    for (const old of article.querySelectorAll('.mdl-notice.error')) old.remove();
+    const card = h(
+      'div',
+      { class: 'mdl-notice error' },
+      h('div', { class: 'mdl-notice-text' }, h('b', null, t('edit.loadFailed')), h('code', null, detail)),
+      h('div', { class: 'mdl-notice-actions' }, h('button', { onclick: () => card.remove() }, t('puml.close'))),
+    );
+    article.prepend(card);
+    window.scrollTo(0, 0);
+    updateStatus();
+  }
+
+  let entering = false;
   async function enterEdit() {
-    if (mode === 'edit' || kind !== 'md') return;
-    if (!rawView.hidden) toggleRaw();
+    if (mode === 'edit' || kind !== 'md' || entering) return;
+    entering = true;
+    if (!rawView.hidden) await toggleRaw();
     const at = headingIndex();
     const wasTop = window.scrollY < 40;
-    mode = 'edit';
-    document.documentElement.classList.add('mdl-editing');
-    editBtn.classList.add('active');
-    if (!globalThis.__mdlEditor) {
-      await send({ type: 'insertCss', file: 'editor.css' });
-      await send({ type: 'insertCss', file: 'katex.css' });
-      katexCssLoaded = true;
-      await send({ type: 'inject', file: 'editor.js' });
-    }
-    if (!globalThis.__mdlEditor) {
-      mode = 'view';
-      document.documentElement.classList.remove('mdl-editing');
-      editBtn.classList.remove('active');
+    try {
+      if (!globalThis.__mdlEditor) {
+        const css = await send({ type: 'insertCss', file: 'editor.css' });
+        await send({ type: 'insertCss', file: 'katex.css' });
+        katexCssLoaded = true;
+        const js = await send({ type: 'inject', file: 'editor.js' });
+        if (!globalThis.__mdlEditor) throw new Error(js.error || css.error || t('edit.reloadHint'));
+      }
+      const m = source.match(FRONT_MATTER);
+      front = m ? m[0] : '';
+      // Built off-screen first, so a failure cannot blank the page.
+      const created = await Promise.race([
+        globalThis.__mdlEditor.create({
+          root: editorHost,
+          markdown: source.slice(front.length),
+          onChange: onEdit,
+          renderPreview: previewDiagram,
+          placeholder: t('edit.placeholder'),
+        }),
+        new Promise((_, reject) => setTimeout(() => reject(new Error('timeout: editor did not start within 20s')), 20000)),
+      ]);
+      if (!editorHost.querySelector('.ProseMirror')) throw new Error('editor produced no content');
+      editor = created;
+      mode = 'edit';
+      document.documentElement.classList.add('mdl-editing');
+      editBtn.classList.add('active');
+      article.hidden = true;
+      editorHost.hidden = false;
+      editorHeadings();
+      if (!wasTop && headings[at]) headings[at].scrollIntoView();
+      else window.scrollTo(0, 0);
+    } catch (e) {
+      editFailed(e);
+      entering = false;
       return;
     }
-    const m = source.match(FRONT_MATTER);
-    front = m ? m[0] : '';
-    article.hidden = true;
-    editorHost.hidden = false;
-    editorHost.replaceChildren();
-    editor = await globalThis.__mdlEditor.create({
-      root: editorHost,
-      markdown: source.slice(front.length),
-      onChange: onEdit,
-      renderPreview: previewDiagram,
-      placeholder: t('edit.placeholder'),
-    });
-    editorHeadings();
-    if (!wasTop && headings[at]) headings[at].scrollIntoView();
-    if (!fileHandle) {
-      const stored = await idb('readonly', (store) => store.get(pageUrl()));
-      if (stored && stored.queryPermission && (await stored.queryPermission({ mode: 'readwrite' })) === 'granted') {
-        fileHandle = stored;
+    entering = false;
+    try {
+      if (!fileHandle) {
+        const stored = await idb('readonly', (store) => store.get(pageUrl()));
+        if (stored && stored.queryPermission && (await stored.queryPermission({ mode: 'readwrite' })) === 'granted') {
+          fileHandle = stored;
+        }
       }
-    }
+    } catch {}
     updateStatus();
   }
 
@@ -812,16 +853,16 @@ const clean = (s) => s.replace(/^﻿/, '');
     const at = headingIndex();
     const wasTop = window.scrollY < 40;
     clearTimeout(outlineTimer);
-    source = currentText();
     const old = editor;
-    editor = null;
-    mode = 'view';
-    document.documentElement.classList.remove('mdl-editing');
-    editBtn.classList.remove('active');
-    editorHost.hidden = true;
-    article.hidden = false;
-    await old.destroy();
-    editorHost.replaceChildren();
+    try {
+      source = currentText();
+    } catch (e) {
+      console.error('[MD Lens] could not read editor content', e);
+    }
+    leaveEditUi();
+    try {
+      await old.destroy();
+    } catch {}
     await render();
     if (!wasTop && headings[at]) headings[at].scrollIntoView();
     updateStatus();
