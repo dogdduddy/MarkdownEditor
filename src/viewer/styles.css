@@ -498,6 +498,17 @@ html { scroll-padding-top: 24px; }
   color: var(--text-muted);
   font-size: 13px;
 }
+.mdl-save-prompt {
+  position: fixed;
+  right: 22px;
+  bottom: 68px;
+  z-index: 16;
+  width: min(460px, calc(100vw - 44px));
+  margin: 0;
+  background: var(--bg-side);
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.18);
+}
+.mdl-save-prompt code { margin-top: 6px; font-family: var(--font-mono); font-size: 12px; word-break: break-all; color: var(--text-muted); }
 .mdl-dirty .mdl-status-text { color: var(--text-strong); }
 .mdl-save:disabled { opacity: 0.6; cursor: default; }
 

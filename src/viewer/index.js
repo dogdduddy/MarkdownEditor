@@ -112,6 +112,9 @@ const clean = (s) => s.replace(/^﻿/, '');
     }
   }
 
+  // What is on disk, as far as we know: used to recognise the opened file again.
+  let diskText = source;
+
   const fileName = decode(location.pathname.replace(/\/$/, '').split('/').pop() || location.hostname);
 
   // ---------- document shell ----------
@@ -708,7 +711,8 @@ const clean = (s) => s.replace(/^﻿/, '');
   let fileHandle = null;
   let outlineTimer = null;
   let saveTimer = null;
-  const canPick = typeof window.showSaveFilePicker === 'function';
+  let savePrompt = null;
+  const canPick = typeof window.showOpenFilePicker === 'function';
 
   function updateStatus(message) {
     status.hidden = mode !== 'edit' && !dirty;
@@ -838,12 +842,7 @@ const clean = (s) => s.replace(/^﻿/, '');
     }
     entering = false;
     try {
-      if (!fileHandle) {
-        const stored = await idb('readonly', (store) => store.get(pageUrl()));
-        if (stored && stored.queryPermission && (await stored.queryPermission({ mode: 'readwrite' })) === 'granted') {
-          fileHandle = stored;
-        }
-      }
+      if (!fileHandle) fileHandle = await findHandle(false);
     } catch {}
     updateStatus();
   }
@@ -860,6 +859,7 @@ const clean = (s) => s.replace(/^﻿/, '');
       console.error('[MD Lens] could not read editor content', e);
     }
     leaveEditUi();
+    closeSavePrompt();
     try {
       await old.destroy();
     } catch {}
@@ -872,21 +872,128 @@ const clean = (s) => s.replace(/^﻿/, '');
     return mode === 'edit' ? exitEdit() : enterEdit();
   }
 
-  async function acquireHandle() {
-    const stored = await idb('readonly', (store) => store.get(pageUrl()));
-    if (stored && stored.requestPermission) {
+  // A page cannot learn where its file lives, so the original has to be pointed
+  // at once: either the file itself, or a folder above it (then every document
+  // below that folder saves in place without asking again).
+  const DIRS_KEY = '\0dirs';
+  const sameText = (a, b) => clean(a).replace(/\r\n/g, '\n') === clean(b).replace(/\r\n/g, '\n');
+  const pathParts = () => location.pathname.split('/').filter(Boolean).map(decode);
+
+  async function matchesDisk(handle) {
+    try {
+      return sameText(await (await handle.getFile()).text(), diskText);
+    } catch {
+      return false;
+    }
+  }
+
+  // Finds the opened document below a folder handle by matching the URL path.
+  async function resolveInDir(dir) {
+    const parts = pathParts();
+    let fallback = null;
+    for (let i = parts.length - 2; i >= 0; i--) {
+      if (parts[i] !== dir.name) continue;
       try {
-        if ((await stored.requestPermission({ mode: 'readwrite' })) === 'granted') return stored;
+        let d = dir;
+        for (const part of parts.slice(i + 1, -1)) d = await d.getDirectoryHandle(part);
+        const handle = await d.getFileHandle(parts[parts.length - 1]);
+        if (await matchesDisk(handle)) return { handle, same: true };
+        fallback = fallback || handle;
       } catch {}
     }
-    const ext = (fileName.match(/\.[^.]+$/) || ['.md'])[0].toLowerCase();
-    const handle = await window.showSaveFilePicker({
-      id: 'mdlens',
-      suggestedName: fileName,
-      types: [{ description: 'Markdown', accept: { 'text/markdown': [...new Set([ext, '.md', '.markdown', '.txt'])] } }],
-    });
-    await idb('readwrite', (store) => store.put(handle, pageUrl()));
-    return handle;
+    return fallback ? { handle: fallback, same: false } : null;
+  }
+
+  // ask = may show the browser's permission prompt (needs a user gesture).
+  async function findHandle(ask) {
+    const allowed = async (handle) => {
+      try {
+        const opts = { mode: 'readwrite' };
+        return (await (ask ? handle.requestPermission(opts) : handle.queryPermission(opts))) === 'granted';
+      } catch {
+        return false;
+      }
+    };
+    const stored = await idb('readonly', (store) => store.get(pageUrl()));
+    if (stored && stored.queryPermission && (await allowed(stored))) return stored;
+    const dirs = (await idb('readonly', (store) => store.get(DIRS_KEY))) || [];
+    const parts = pathParts().slice(0, -1);
+    for (const dir of dirs) {
+      if (!parts.includes(dir.name) || !(await allowed(dir))) continue;
+      const found = await resolveInDir(dir);
+      if (found && found.same) return found.handle;
+    }
+    return null;
+  }
+
+  const confirmOther = (name) => window.confirm(t('edit.mismatch').replace('{name}', name));
+
+  function closeSavePrompt() {
+    if (savePrompt) savePrompt.remove();
+    savePrompt = null;
+  }
+
+  async function useHandle(handle) {
+    fileHandle = handle;
+    closeSavePrompt();
+    await save(true);
+  }
+
+  async function pickFile() {
+    try {
+      const ext = (fileName.match(/\.[^.]+$/) || ['.md'])[0].toLowerCase();
+      const [handle] = await window.showOpenFilePicker({
+        id: 'mdlens',
+        types: [{ description: 'Markdown', accept: { 'text/markdown': [...new Set([ext, '.md', '.markdown', '.txt'])] } }],
+      });
+      if (!handle) return;
+      if ((handle.name !== fileName || !(await matchesDisk(handle))) && !confirmOther(handle.name)) return;
+      await idb('readwrite', (store) => store.put(handle, pageUrl()));
+      await useHandle(handle);
+    } catch (e) {
+      if (!e || e.name !== 'AbortError') updateStatus(`${t('edit.failed')}: ${(e && e.message) || e}`);
+    }
+  }
+
+  async function pickFolder() {
+    try {
+      const dir = await window.showDirectoryPicker({ id: 'mdlens', mode: 'readwrite' });
+      const found = await resolveInDir(dir);
+      if (!found) {
+        updateStatus(t('edit.notInFolder'));
+        return;
+      }
+      if (!found.same && !confirmOther(found.handle.name)) return;
+      const dirs = (await idb('readonly', (store) => store.get(DIRS_KEY))) || [];
+      const known = await Promise.all(dirs.map((d) => d.isSameEntry(dir).catch(() => false)));
+      if (!known.includes(true)) await idb('readwrite', (store) => store.put([...dirs, dir], DIRS_KEY));
+      await useHandle(found.handle);
+    } catch (e) {
+      if (!e || e.name !== 'AbortError') updateStatus(`${t('edit.failed')}: ${(e && e.message) || e}`);
+    }
+  }
+
+  function showSavePrompt() {
+    closeSavePrompt();
+    savePrompt = h(
+      'div',
+      { class: 'mdl-notice mdl-save-prompt' },
+      h(
+        'div',
+        { class: 'mdl-notice-text' },
+        h('b', null, t('edit.pickTitle')),
+        h('span', null, t('edit.pickDesc')),
+        h('code', null, decode(location.pathname)),
+      ),
+      h(
+        'div',
+        { class: 'mdl-notice-actions' },
+        h('button', { class: 'primary', onclick: pickFile }, t('edit.pickFile')),
+        typeof window.showDirectoryPicker === 'function' && h('button', { class: 'mdl-pick-folder', onclick: pickFolder }, t('edit.pickFolder')),
+        h('button', { class: 'link', onclick: closeSavePrompt }, t('puml.close')),
+      ),
+    );
+    document.body.append(savePrompt);
   }
 
   // interactive = started by the user (button / shortcut); may open a picker.
@@ -908,12 +1015,19 @@ const clean = (s) => s.replace(/^﻿/, '');
     try {
       if (!fileHandle) {
         if (!interactive) return;
-        fileHandle = await acquireHandle();
+        fileHandle = await findHandle(true);
+        if (!fileHandle) {
+          saving = false;
+          updateStatus();
+          showSavePrompt();
+          return;
+        }
       }
       const writable = await fileHandle.createWritable();
       await writable.write(text);
       await writable.close();
       source = text;
+      diskText = text;
       dirty = currentText() !== text;
       saving = false;
       updateStatus();
@@ -997,6 +1111,7 @@ const clean = (s) => s.replace(/^﻿/, '');
       busy = false;
       if (r.ok && clean(r.text) !== source) {
         source = clean(r.text);
+        diskText = source;
         if (!rawView.hidden) rawView.textContent = source;
         render();
       }

@@ -127,17 +127,21 @@ const worlds = [];
 cdp.on('Runtime.executionContextCreated', (e) => worlds.push(e.context));
 await cdp.send('Runtime.enable');
 const world = worlds.find((c) => c.origin.startsWith('chrome-extension://'));
+const original = await (await import('node:fs/promises')).readFile(path.join(docs, 'sample.md'), 'utf8');
 await cdp.send('Runtime.evaluate', {
   contextId: world.id,
-  expression: `window.showSaveFilePicker = async () => ({ name: 'sample.md', createWritable: async () => ({ write: async (t) => { document.documentElement.dataset.written = t; }, close: async () => {} }) })`,
+  expression: `window.__orig = ${JSON.stringify(original)}; window.showOpenFilePicker = async () => [{ name: 'sample.md', getFile: async () => ({ text: async () => window.__orig }), createWritable: async () => ({ write: async (t) => { document.documentElement.dataset.written = t; }, close: async () => {} }) }]`,
 });
-const original = await (await import('node:fs/promises')).readFile(path.join(docs, 'sample.md'), 'utf8');
 await page.locator('.mdl-edit-btn').click();
 await page.waitForSelector('.mdl-editor .ProseMirror h1', { timeout: 20000 });
 check('edit mode opens', await page.locator('.mdl-editor .ProseMirror').isVisible());
 check('outline works in edit mode', (await page.locator('.mdl-outline .mdl-ol-item').count()) === 8);
 await page.keyboard.press('Control+s');
+await page.waitForSelector('.mdl-save-prompt');
+check('first save asks for the original file', (await page.locator('.mdl-save-prompt code').innerText()).endsWith('/docs/sample.md'));
+await page.locator('.mdl-save-prompt button.primary').click();
 await page.waitForFunction(() => document.documentElement.dataset.written !== undefined);
+check('save prompt closes after picking', (await page.locator('.mdl-save-prompt').count()) === 0);
 check('untouched document saves byte-identical', (await page.evaluate(() => document.documentElement.dataset.written)) === original);
 await page.locator('.mdl-editor .ProseMirror h2').first().click();
 await page.keyboard.press('End');
@@ -200,12 +204,19 @@ cdp2.on('Runtime.executionContextCreated', (e) => worlds2.push(e.context));
 await cdp2.send('Runtime.enable');
 const world2 = worlds2.find((c) => c.origin.startsWith('chrome-extension://'));
 const inExt = (expression) => cdp2.send('Runtime.evaluate', { contextId: world2.id, expression, awaitPromise: true });
-await inExt(`window.showSaveFilePicker = async () => ({ name: 'refs.md', createWritable: async () => ({ write: async (t) => { document.documentElement.dataset.written = t; }, close: async () => {} }) })`);
 const refsOriginal = await (await import('node:fs/promises')).readFile(path.join(docs, 'refs.md'), 'utf8');
+await inExt(`(() => {
+  const text = ${JSON.stringify(refsOriginal)};
+  const file = { name: 'refs.md', getFile: async () => ({ text: async () => text }), createWritable: async () => ({ write: async (t) => { document.documentElement.dataset.written = t; }, close: async () => {} }) };
+  const dir = { name: 'docs', isSameEntry: async () => false, getDirectoryHandle: async () => { throw new Error('none'); }, getFileHandle: async (n) => { if (n !== 'refs.md') throw new Error('none'); return file; } };
+  window.showDirectoryPicker = async () => dir;
+})()`);
 await page.locator('.mdl-edit-btn').click();
 await page.waitForSelector('.mdl-editor .ProseMirror h1');
 await page.keyboard.press('Control+s');
+await page.locator('.mdl-save-prompt .mdl-pick-folder').click();
 await page.waitForFunction(() => document.documentElement.dataset.written !== undefined);
+check('refs: connected folder resolves the opened file', (await page.locator('.mdl-status-text').innerText()).includes('refs.md'));
 check('refs: untouched save is byte-identical', (await page.evaluate(() => document.documentElement.dataset.written)) === refsOriginal);
 for (const text of ['첫 문단', '둘째 문단']) {
   await page.locator('.mdl-editor .ProseMirror p', { hasText: text }).click();
