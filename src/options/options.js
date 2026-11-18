@@ -108,6 +108,8 @@ function general() {
     toggleRow('outlineCollapse'),
     toggleRow('folderRender'),
     toggleRow('renderTxt'),
+    toggleRow('editByDefault'),
+    toggleRow('autoSave'),
     toggleRow('autoRefresh'),
     h('div', { class: 'row' }, label('opt.refreshInterval'), h('div', { class: 'control' }, interval, h('span', { class: 'unit' }, t('opt.sec')))),
     toggleRow('charsetCompat'),
@@ -191,9 +193,10 @@ function plugins() {
       switchEl(all, (v) => set({ plugins: Object.fromEntries(PLUGIN_KEYS.map((k) => [k, v])) })),
     ),
     toggleRow('breaks'),
-    PLUGIN_KEYS.map((k) =>
+    PLUGIN_KEYS.map((k) => [
       h('div', { class: 'row' }, label(`opt.p.${k}`), switchEl(settings.plugins[k], (v) => set({ plugins: { [k]: v } }))),
-    ),
+      k === 'plantuml' ? toggleRow('plantumlPrompt') : null,
+    ]),
   ];
 }
 
@@ -231,7 +234,7 @@ function draw() {
       }),
     ),
   );
-  content.replaceChildren(...TABS[activeTab]().flat());
+  content.replaceChildren(...TABS[activeTab]().flat(Infinity).filter(Boolean));
   content.scrollTop = scroll;
 }
 

@@ -19,6 +19,8 @@ const ICON = {
   caret: '<svg viewBox="0 0 24 24" fill="currentColor"><path d="m9 6 7 6-7 6z"/></svg>',
   file:
     '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><path d="M6 3h8l4 4v14H6z"/><path d="M14 3v4h4"/></svg>',
+  edit:
+    '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 20h4L19 9l-4-4L4 16z"/><path d="m13.500 6.500 4 4"/></svg>',
   up:
     '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V6M6 11l6-6 6 6"/></svg>',
   open:
@@ -65,6 +67,29 @@ function decode(s) {
 }
 
 const pageUrl = () => location.href.split('#')[0];
+const FRONT_MATTER = /^---\r?\n[\s\S]*?\r?\n---[ \t]*(\r?\n|$)/;
+
+// File handles survive reloads here, so the file only has to be picked once.
+function idb(mode, fn) {
+  return new Promise((resolve) => {
+    try {
+      const open = indexedDB.open('mdlens', 1);
+      open.onupgradeneeded = () => open.result.createObjectStore('handles');
+      open.onerror = () => resolve(undefined);
+      open.onsuccess = () => {
+        try {
+          const req = fn(open.result.transaction('handles', mode).objectStore('handles'));
+          req.onsuccess = () => resolve(req.result);
+          req.onerror = () => resolve(undefined);
+        } catch {
+          resolve(undefined);
+        }
+      };
+    } catch {
+      resolve(undefined);
+    }
+  });
+}
 const clean = (s) => s.replace(/^﻿/, '');
 
 (async function main() {
@@ -102,6 +127,10 @@ const clean = (s) => s.replace(/^﻿/, '');
   );
 
   const article = h('article', { class: 'markdown-body' });
+  const editorHost = h('div', { class: 'mdl-editor', hidden: true });
+  const statusText = h('span', { class: 'mdl-status-text' });
+  const saveBtn = h('button', { class: 'mdl-save', onclick: () => save(true) }, t('edit.save'));
+  const status = h('div', { class: 'mdl-status', hidden: true }, statusText, saveBtn);
   const rawView = h('pre', { class: 'mdl-raw', hidden: true });
   const outlinePanel = h('div', { class: 'mdl-panel mdl-outline' });
   const folderPanel = h('div', { class: 'mdl-panel mdl-folder' });
@@ -151,6 +180,7 @@ const clean = (s) => s.replace(/^﻿/, '');
       },
     }, label);
   menu.append(
+    kind === 'md' ? menuItem(t('menu.edit'), toggleEdit) : null,
     kind === 'md' ? menuItem(t('menu.raw'), toggleRaw) : null,
     menuItem(t('menu.fullscreen'), toggleFullscreen),
     menuItem(t('menu.zen'), () => update({ zen: !settings.zen })),
@@ -163,6 +193,13 @@ const clean = (s) => s.replace(/^﻿/, '');
     title: t('sidebar.toggle'),
     html: ICON.sidebar,
     onclick: () => update({ sidebarOpen: !settings.sidebarOpen }),
+  });
+  const editBtn = h('button', {
+    class: 'mdl-icon-btn mdl-edit-btn',
+    title: t('menu.edit'),
+    html: ICON.edit,
+    hidden: kind !== 'md',
+    onclick: () => toggleEdit(),
   });
   const menuBtn = h('button', {
     class: 'mdl-icon-btn mdl-menu-btn',
@@ -177,7 +214,7 @@ const clean = (s) => s.replace(/^﻿/, '');
     if (!menu.hidden && !menu.contains(e.target)) menu.hidden = true;
   });
 
-  const main = h('main', { class: 'mdl-main' }, sideBtn, menuBtn, menu, article, rawView);
+  const main = h('main', { class: 'mdl-main' }, sideBtn, editBtn, menuBtn, menu, article, editorHost, rawView, status);
   document.body.replaceChildren(h('div', { class: 'mdl-app' }, sidebar, main));
   document.body.removeAttribute('style');
 
@@ -253,10 +290,53 @@ const clean = (s) => s.replace(/^﻿/, '');
   let headings = [];
   let katexCssLoaded = false;
 
+  let plantumlOnce = false;
+  let plantumlDismissed = false;
+
+  function plantumlCard() {
+    const enable = (always) => {
+      if (always) {
+        settings = { ...settings, plugins: { ...settings.plugins, plantuml: true } };
+        saveSettings({ plugins: { plantuml: true } });
+      } else {
+        plantumlOnce = true;
+      }
+      render();
+    };
+    const card = h(
+      'div',
+      { class: 'mdl-notice' },
+      h('div', { class: 'mdl-notice-text' }, h('b', null, t('puml.title')), h('span', null, t('puml.desc'))),
+      h(
+        'div',
+        { class: 'mdl-notice-actions' },
+        h('button', { class: 'primary', onclick: () => enable(true) }, t('puml.always')),
+        h('button', { onclick: () => enable(false) }, t('puml.once')),
+        h('button', {
+          onclick: () => {
+            plantumlDismissed = true;
+            card.remove();
+          },
+        }, t('puml.close')),
+        h('button', {
+          class: 'link',
+          onclick: () => {
+            card.remove();
+            update({ plantumlPrompt: false });
+          },
+        }, t('puml.never')),
+      ),
+    );
+    return card;
+  }
+
   async function render() {
     const id = ++renderId;
     const y = window.scrollY;
-    const toHtml = createRenderer(settings);
+    const plantumlOn = settings.plugins.plantuml || plantumlOnce;
+    const toHtml = createRenderer(
+      plantumlOn ? { ...settings, plugins: { ...settings.plugins, plantuml: true } } : settings,
+    );
     article.innerHTML = toHtml(source);
 
     // heading anchors
@@ -301,6 +381,12 @@ const clean = (s) => s.replace(/^﻿/, '');
       const wrap = h('div', { class: 'mdl-code' });
       pre.replaceWith(wrap);
       wrap.append(lang ? h('span', { class: 'mdl-code-lang' }, lang) : null, btn, pre);
+    }
+
+    // PlantUML blocks in the document while the plugin is off: offer to turn it on.
+    if (!plantumlOn && settings.plantumlPrompt && !plantumlDismissed) {
+      const first = article.querySelector('code.language-plantuml, code.language-puml');
+      if (first) first.closest('.mdl-code').before(plantumlCard());
     }
 
     // tables
@@ -385,6 +471,7 @@ const clean = (s) => s.replace(/^﻿/, '');
 
   function buildOutline() {
     outlineItems = [];
+    activeRow = null;
     outlinePanel.replaceChildren();
     if (!headings.length) {
       outlinePanel.append(h('div', { class: 'mdl-empty' }, t(kind === 'dir' ? 'folder.empty' : 'outline.empty')));
@@ -392,6 +479,7 @@ const clean = (s) => s.replace(/^﻿/, '');
     }
     const min = Math.min(...headings.map((el) => +el.tagName[1]));
     headings.forEach((el, i) => {
+      const key = el.id || `#${i}`;
       const level = +el.tagName[1] - min;
       const next = headings[i + 1];
       const hasChildren = !!next && +next.tagName[1] - min > level;
@@ -407,8 +495,8 @@ const clean = (s) => s.replace(/^﻿/, '');
         if (hasChildren) {
           caret.addEventListener('click', (e) => {
             e.stopPropagation();
-            if (collapsed.has(el.id)) collapsed.delete(el.id);
-            else collapsed.add(el.id);
+            if (collapsed.has(key)) collapsed.delete(key);
+            else collapsed.add(key);
             updateCollapse();
           });
         }
@@ -419,10 +507,10 @@ const clean = (s) => s.replace(/^﻿/, '');
         pinned = outlineItems.find((item) => item.el === el) || null;
         spy();
         el.scrollIntoView({ behavior: 'smooth', block: 'start' });
-        history.replaceState(null, '', `#${encodeURIComponent(el.id)}`);
+        if (el.id && mode === 'view') history.replaceState(null, '', `#${encodeURIComponent(el.id)}`);
       });
       outlinePanel.append(row);
-      outlineItems.push({ el, row, level });
+      outlineItems.push({ el, row, level, key });
     });
     updateCollapse();
     applyFilter();
@@ -434,7 +522,7 @@ const clean = (s) => s.replace(/^﻿/, '');
     for (const item of outlineItems) {
       if (item.level <= hideBelow) hideBelow = Infinity;
       item.row.classList.toggle('mdl-collapsed-child', item.level > hideBelow);
-      const isCollapsed = settings.outlineCollapse && collapsed.has(item.el.id);
+      const isCollapsed = settings.outlineCollapse && collapsed.has(item.key);
       item.row.classList.toggle('collapsed', isCollapsed);
       if (isCollapsed && hideBelow === Infinity) hideBelow = item.level;
     }
@@ -611,8 +699,203 @@ const clean = (s) => s.replace(/^﻿/, '');
     }
   }
 
+  // ---------- editing ----------
+  let mode = 'view';
+  let editor = null;
+  let front = '';
+  let dirty = false;
+  let saving = false;
+  let fileHandle = null;
+  let outlineTimer = null;
+  let saveTimer = null;
+  const canPick = typeof window.showSaveFilePicker === 'function';
+
+  function updateStatus(message) {
+    status.hidden = mode !== 'edit' && !dirty;
+    document.documentElement.classList.toggle('mdl-dirty', dirty);
+    let text = message;
+    if (!text) {
+      if (dirty) text = t('edit.dirty');
+      else if (fileHandle) text = `${t('edit.saved')} · ${fileHandle.name}`;
+      else text = t(canPick ? 'edit.pickHint' : 'edit.downloadHint');
+    }
+    statusText.textContent = text;
+    saveBtn.disabled = saving;
+  }
+
+  const currentText = () => (editor ? front + editor.getMarkdown() : source);
+
+  function editorHeadings() {
+    headings = [...editorHost.querySelectorAll('.ProseMirror :is(h1,h2,h3,h4,h5,h6)')];
+    buildOutline();
+  }
+
+  function onEdit() {
+    dirty = true;
+    updateStatus();
+    clearTimeout(outlineTimer);
+    outlineTimer = setTimeout(editorHeadings, 300);
+    if (settings.autoSave && fileHandle) {
+      clearTimeout(saveTimer);
+      saveTimer = setTimeout(() => save(false), 1000);
+    }
+  }
+
+  function previewDiagram(language, content, apply) {
+    if (language !== 'mermaid' || !settings.plugins.mermaid || !content.trim()) return null;
+    (async () => {
+      if (!globalThis.__mdlMermaid) await send({ type: 'inject', file: 'mermaid.js' });
+      const mermaid = globalThis.__mdlMermaid;
+      if (!mermaid) return;
+      mermaid.initialize({ startOnLoad: false, securityLevel: 'strict', theme: isDark() ? 'dark' : 'default' });
+      const out = h('div', { class: 'mdl-diagram-out' });
+      try {
+        const { svg } = await mermaid.render(`mdl-preview-${Date.now()}-${Math.random().toString(36).slice(2)}`, content);
+        out.innerHTML = svg;
+      } catch (e) {
+        out.textContent = String((e && e.message) || e);
+        for (const junk of document.querySelectorAll('body > [id^="dmdl-preview-"]')) junk.remove();
+      }
+      apply(out);
+    })();
+    return h('div', { class: 'mdl-diagram-out' });
+  }
+
+  // Remember roughly where the reader was when switching between modes.
+  const headingIndex = () => Math.max(0, outlineItems.findIndex((item) => item.row === activeRow));
+
+  async function enterEdit() {
+    if (mode === 'edit' || kind !== 'md') return;
+    if (!rawView.hidden) toggleRaw();
+    const at = headingIndex();
+    const wasTop = window.scrollY < 40;
+    mode = 'edit';
+    document.documentElement.classList.add('mdl-editing');
+    editBtn.classList.add('active');
+    if (!globalThis.__mdlEditor) {
+      await send({ type: 'insertCss', file: 'editor.css' });
+      await send({ type: 'insertCss', file: 'katex.css' });
+      katexCssLoaded = true;
+      await send({ type: 'inject', file: 'editor.js' });
+    }
+    if (!globalThis.__mdlEditor) {
+      mode = 'view';
+      document.documentElement.classList.remove('mdl-editing');
+      editBtn.classList.remove('active');
+      return;
+    }
+    const m = source.match(FRONT_MATTER);
+    front = m ? m[0] : '';
+    article.hidden = true;
+    editorHost.hidden = false;
+    editorHost.replaceChildren();
+    editor = await globalThis.__mdlEditor.create({
+      root: editorHost,
+      markdown: source.slice(front.length),
+      onChange: onEdit,
+      renderPreview: previewDiagram,
+      placeholder: t('edit.placeholder'),
+    });
+    editorHeadings();
+    if (!wasTop && headings[at]) headings[at].scrollIntoView();
+    if (!fileHandle) {
+      const stored = await idb('readonly', (store) => store.get(pageUrl()));
+      if (stored && stored.queryPermission && (await stored.queryPermission({ mode: 'readwrite' })) === 'granted') {
+        fileHandle = stored;
+      }
+    }
+    updateStatus();
+  }
+
+  async function exitEdit() {
+    if (mode !== 'edit') return;
+    const at = headingIndex();
+    const wasTop = window.scrollY < 40;
+    clearTimeout(outlineTimer);
+    source = currentText();
+    const old = editor;
+    editor = null;
+    mode = 'view';
+    document.documentElement.classList.remove('mdl-editing');
+    editBtn.classList.remove('active');
+    editorHost.hidden = true;
+    article.hidden = false;
+    await old.destroy();
+    editorHost.replaceChildren();
+    await render();
+    if (!wasTop && headings[at]) headings[at].scrollIntoView();
+    updateStatus();
+  }
+
+  function toggleEdit() {
+    return mode === 'edit' ? exitEdit() : enterEdit();
+  }
+
+  async function acquireHandle() {
+    const stored = await idb('readonly', (store) => store.get(pageUrl()));
+    if (stored && stored.requestPermission) {
+      try {
+        if ((await stored.requestPermission({ mode: 'readwrite' })) === 'granted') return stored;
+      } catch {}
+    }
+    const ext = (fileName.match(/\.[^.]+$/) || ['.md'])[0].toLowerCase();
+    const handle = await window.showSaveFilePicker({
+      id: 'mdlens',
+      suggestedName: fileName,
+      types: [{ description: 'Markdown', accept: { 'text/markdown': [...new Set([ext, '.md', '.markdown', '.txt'])] } }],
+    });
+    await idb('readwrite', (store) => store.put(handle, pageUrl()));
+    return handle;
+  }
+
+  // interactive = started by the user (button / shortcut); may open a picker.
+  async function save(interactive) {
+    if (saving) return;
+    const text = currentText();
+    if (!canPick) {
+      if (!interactive) return;
+      const a = h('a', { href: URL.createObjectURL(new Blob([text], { type: 'text/markdown' })), download: fileName });
+      a.click();
+      URL.revokeObjectURL(a.href);
+      source = text;
+      dirty = false;
+      updateStatus(t('edit.downloaded'));
+      return;
+    }
+    saving = true;
+    updateStatus(t('edit.saving'));
+    try {
+      if (!fileHandle) {
+        if (!interactive) return;
+        fileHandle = await acquireHandle();
+      }
+      const writable = await fileHandle.createWritable();
+      await writable.write(text);
+      await writable.close();
+      source = text;
+      dirty = currentText() !== text;
+      saving = false;
+      updateStatus();
+    } catch (e) {
+      saving = false;
+      if (e && e.name === 'AbortError') {
+        updateStatus();
+      } else {
+        if (e && e.name === 'NotAllowedError') fileHandle = null;
+        updateStatus(`${t('edit.failed')}: ${(e && e.message) || e}`);
+      }
+    } finally {
+      saving = false;
+    }
+  }
+
+  window.addEventListener('beforeunload', (e) => {
+    if (dirty) e.preventDefault();
+  });
+
   // ---------- menu actions ----------
-  function toggleRaw() {
+  async function toggleRaw() {
+    if (mode === 'edit') await exitEdit();
     const showRaw = rawView.hidden;
     if (showRaw) rawView.textContent = source;
     rawView.hidden = !showRaw;
@@ -625,6 +908,14 @@ const clean = (s) => s.replace(/^﻿/, '');
   }
 
   document.addEventListener('keydown', (e) => {
+    const mod = (e.metaKey || e.ctrlKey) && !e.altKey && !e.shiftKey;
+    if (mod && e.key.toLowerCase() === 's' && (mode === 'edit' || dirty)) {
+      e.preventDefault();
+      save(true);
+    } else if (mod && e.key.toLowerCase() === 'e' && kind === 'md') {
+      e.preventDefault();
+      toggleEdit();
+    }
     if (e.key === 'Escape') {
       if (!menu.hidden) menu.hidden = true;
       else if (settings.zen) update({ zen: false });
@@ -659,7 +950,7 @@ const clean = (s) => s.replace(/^﻿/, '');
     if (kind !== 'md' || !settings.autoRefresh) return;
     const sec = Math.min(600, Math.max(0.5, Number(settings.refreshInterval) || 2));
     timer = setInterval(async () => {
-      if (busy || document.hidden) return;
+      if (busy || document.hidden || mode === 'edit' || dirty) return;
       busy = true;
       const r = await send({ type: 'fetchText', url: pageUrl() });
       busy = false;
@@ -682,7 +973,7 @@ const clean = (s) => s.replace(/^﻿/, '');
     // Keep width while the user is dragging the resizer in this tab.
     settings = next;
     applyAppearance();
-    if (kind === 'md') {
+    if (kind === 'md' && mode === 'view') {
       const pluginsChanged = JSON.stringify(next.plugins) !== JSON.stringify(prev.plugins);
       const themeFlip = wasDark !== isDark() && article.querySelector('.mdl-diagram-out, .mdl-diagram');
       if (next.breaks !== prev.breaks || pluginsChanged || themeFlip) render();
@@ -692,7 +983,7 @@ const clean = (s) => s.replace(/^﻿/, '');
   });
   mq.addEventListener('change', () => {
     applyAppearance();
-    if (kind === 'md' && article.querySelector('.mdl-diagram-out')) render();
+    if (kind === 'md' && mode === 'view' && article.querySelector('.mdl-diagram-out')) render();
   });
 
   // ---------- go ----------
@@ -707,5 +998,6 @@ const clean = (s) => s.replace(/^﻿/, '');
       if (target) target.scrollIntoView();
     }
     setupRefresh();
+    if (settings.editByDefault) await enterEdit();
   }
 })();

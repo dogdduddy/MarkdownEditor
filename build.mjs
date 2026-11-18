@@ -40,6 +40,7 @@ const options = {
     loader: 'src/loader.js',
     viewer: 'src/viewer/index.js',
     mermaid: 'src/viewer/mermaid-entry.js',
+    editor: 'src/viewer/editor-entry.js',
     options: 'src/options/options.js',
   },
   outdir: out,
@@ -52,10 +53,33 @@ const options = {
   logLevel: 'info',
 };
 
+// Editor stylesheet (Crepe theme), bundled to a single injectable file.
+const cssOptions = {
+  entryPoints: { editor: 'src/viewer/editor.css' },
+  outdir: out,
+  bundle: true,
+  minify: !watch,
+  loader: { '.css': 'css', '.woff2': 'dataurl', '.woff': 'empty', '.ttf': 'empty' },
+  logLevel: 'info',
+};
+
 await statics();
+await build(cssOptions);
+// The editor is built separately: KaTeX (used for its math blocks) refuses to
+// run in quirks mode, which is what Chrome uses for raw text documents.
+const { entryPoints } = options;
+const editorOptions = {
+  ...options,
+  entryPoints: { editor: 'src/viewer/editor-entry.js' },
+  define: { 'document.compatMode': '"CSS1Compat"' },
+};
+delete entryPoints.editor;
+
 if (watch) {
+  await (await context(editorOptions)).watch();
   const ctx = await context(options);
   await ctx.watch();
 } else {
   await build(options);
+  await build(editorOptions);
 }

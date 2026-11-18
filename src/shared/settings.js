@@ -15,6 +15,9 @@ export const DEFAULTS = {
   refreshInterval: 2,
   charsetCompat: false,
   language: 'ko',
+  editByDefault: false,
+  autoSave: true,
+  plantumlPrompt: true,
   // appearance
   fontSize: 2,
   fontFamily: 'default',

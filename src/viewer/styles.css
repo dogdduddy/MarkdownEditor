@@ -446,3 +446,108 @@ html { scroll-padding-top: 24px; }
   .markdown-body { max-width: none; padding: 0; }
   .mdl-code pre code.hljs { white-space: pre-wrap; }
 }
+
+/* ---------- notices ---------- */
+.mdl-notice {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px 16px;
+  margin: 0 0 10px;
+  padding: 12px 16px;
+  border: 1px solid var(--accent);
+  border-radius: 10px;
+  background: var(--accent-soft);
+  font-size: 0.9em;
+  line-height: 1.5;
+}
+.mdl-notice-text { flex: 1 1 280px; display: flex; flex-direction: column; }
+.mdl-notice-text b { color: var(--text-strong); }
+.mdl-notice-actions { display: flex; flex-wrap: wrap; gap: 6px; }
+.mdl-notice button, .mdl-save {
+  height: 30px;
+  padding: 0 12px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: var(--bg);
+  color: var(--text);
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+}
+.mdl-notice button.primary, .mdl-save { border-color: var(--accent); background: var(--accent); color: #fff; }
+.mdl-notice button.link { border-color: transparent; background: none; color: var(--text-muted); }
+
+/* ---------- editing ---------- */
+.mdl-edit-btn { position: fixed; top: 12px; right: 62px; z-index: 15; background: var(--bg); }
+.mdl-edit-btn.active { background: var(--accent); color: #fff; }
+.mdl-zen .mdl-edit-btn:not(.active) { opacity: 0; }
+.mdl-status {
+  position: fixed;
+  right: 22px;
+  bottom: 18px;
+  z-index: 15;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 6px 6px 6px 14px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--bg-side);
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.18);
+  color: var(--text-muted);
+  font-size: 13px;
+}
+.mdl-dirty .mdl-status-text { color: var(--text-strong); }
+.mdl-save:disabled { opacity: 0.6; cursor: default; }
+
+.mdl-editor { max-width: var(--content-width); margin: 0; padding: 64px 56px 140px; }
+.mdl-centered .mdl-editor { margin: 0 auto; }
+.mdl-editor .milkdown {
+  --crepe-color-background: var(--bg);
+  --crepe-color-on-background: var(--text);
+  --crepe-color-surface: var(--bg-soft);
+  --crepe-color-surface-low: var(--bg-side);
+  --crepe-color-on-surface: var(--text);
+  --crepe-color-on-surface-variant: var(--text-muted);
+  --crepe-color-outline: var(--text-muted);
+  --crepe-color-primary: var(--accent);
+  --crepe-color-secondary: var(--bg-hover);
+  --crepe-color-on-secondary: var(--text-strong);
+  --crepe-color-inverse: var(--text-strong);
+  --crepe-color-on-inverse: var(--bg);
+  --crepe-color-inline-code: var(--accent);
+  --crepe-color-hover: var(--bg-soft);
+  --crepe-color-selected: var(--bg-hover);
+  --crepe-color-inline-area: var(--bg-soft);
+  --crepe-base-font-size: var(--font-size);
+  --crepe-font-title: var(--font-body);
+  --crepe-font-default: var(--font-body);
+  --crepe-font-code: var(--font-mono);
+  background: none;
+}
+.mdl-editor .milkdown .ProseMirror { padding: 0; outline: none; }
+.mdl-editor .milkdown .ProseMirror > :first-child { margin-top: 0; }
+
+@media print {
+  .mdl-edit-btn, .mdl-status { display: none !important; }
+  .mdl-editor { max-width: none; padding: 0; }
+}
+
+/* Match the reading view's typography so switching modes doesn't jump. */
+.mdl-editor .milkdown .ProseMirror :is(h1, h2, h3, h4, h5, h6) {
+  margin: 1.5em 0 0.4em;
+  padding: 0;
+  color: var(--text-strong);
+  font-weight: 700;
+  line-height: 1.35;
+}
+.mdl-editor .milkdown .ProseMirror h1 { font-size: 1.9em; padding-bottom: 0.35em; border-bottom: 1px solid var(--border); }
+.mdl-editor .milkdown .ProseMirror h2 { font-size: 1.45em; }
+.mdl-editor .milkdown .ProseMirror h3 { font-size: 1.2em; }
+.mdl-editor .milkdown .ProseMirror h4 { font-size: 1.05em; }
+.mdl-editor .milkdown .ProseMirror h5 { font-size: 0.95em; }
+.mdl-editor .milkdown .ProseMirror h6 { font-size: 0.9em; color: var(--text-muted); }
+.mdl-editor .milkdown .ProseMirror p { padding: 0.35em 0; line-height: 1.75; }
+.mdl-editor .milkdown .ProseMirror strong { color: var(--text-strong); }
+.mdl-editor .milkdown .ProseMirror a { color: var(--link); }

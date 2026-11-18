@@ -65,6 +65,12 @@ flowchart LR
   B -->|아니오| A
 ```
 
+```plantuml
+@startuml
+A -> B: hi
+@enduml
+```
+
 <img src="x" onerror="document.title='XSS'">
 
 ## 3. 끝

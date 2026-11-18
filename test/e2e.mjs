@@ -108,10 +108,57 @@ await page.screenshot({ path: path.join(outDir, 'viewer-folder.png') });
 
 // raw view
 await page.locator('.mdl-menu-btn').click();
-await page.locator('.mdl-menu-item').first().click();
+await page.locator('.mdl-menu-item', { hasText: '원본 보기' }).click();
 check('raw view', (await page.locator('.mdl-raw').isVisible()) && (await page.locator('.mdl-raw').innerText()).includes('[[TOC]]'));
 await page.locator('.mdl-menu-btn').click();
-await page.locator('.mdl-menu-item').first().click();
+await page.locator('.mdl-menu-item', { hasText: '원본 보기' }).click();
+
+// PlantUML prompt (plugin is off by default)
+check('plantuml prompt shown', (await page.locator('.mdl-notice').count()) === 1);
+check('plantuml not sent while off', (await page.locator('article img[src*="plantuml.com"]').count()) === 0);
+await page.locator('.mdl-notice button', { hasText: '이 문서만' }).click();
+await page.waitForSelector('article img[src*="plantuml.com"]');
+check('plantuml "this document only" renders', (await page.locator('.mdl-notice').count()) === 0);
+check('plantuml setting untouched by one-off', await sw.evaluate(async () => !(await chrome.storage.local.get('settings')).settings?.plugins?.plantuml).catch(() => true));
+
+// editing: run code in the extension's isolated world to stand in for the native file picker
+const cdp = await ctx.newCDPSession(page);
+const worlds = [];
+cdp.on('Runtime.executionContextCreated', (e) => worlds.push(e.context));
+await cdp.send('Runtime.enable');
+const world = worlds.find((c) => c.origin.startsWith('chrome-extension://'));
+await cdp.send('Runtime.evaluate', {
+  contextId: world.id,
+  expression: `window.showSaveFilePicker = async () => ({ name: 'sample.md', createWritable: async () => ({ write: async (t) => { document.documentElement.dataset.written = t; }, close: async () => {} }) })`,
+});
+const original = await (await import('node:fs/promises')).readFile(path.join(docs, 'sample.md'), 'utf8');
+await page.locator('.mdl-edit-btn').click();
+await page.waitForSelector('.mdl-editor .ProseMirror h1', { timeout: 20000 });
+check('edit mode opens', await page.locator('.mdl-editor .ProseMirror').isVisible());
+check('outline works in edit mode', (await page.locator('.mdl-outline .mdl-ol-item').count()) === 8);
+await page.keyboard.press('Control+s');
+await page.waitForFunction(() => document.documentElement.dataset.written !== undefined);
+check('untouched document saves byte-identical', (await page.evaluate(() => document.documentElement.dataset.written)) === original);
+await page.locator('.mdl-editor .ProseMirror h2').first().click();
+await page.keyboard.press('End');
+await page.keyboard.press('Enter');
+await page.keyboard.type('### 새 제목');
+await page.keyboard.press('Enter');
+await page.keyboard.type('새 **굵은** 문단');
+check('"### " becomes a heading while typing', (await page.locator('.mdl-editor .ProseMirror h3', { hasText: '새 제목' }).count()) === 1);
+check('**bold** becomes bold while typing', (await page.locator('.mdl-editor .ProseMirror strong', { hasText: '굵은' }).count()) === 1);
+await page.waitForFunction(() => document.querySelectorAll('.mdl-outline .mdl-ol-item').length === 9);
+check('outline follows edits', true);
+await page.waitForFunction(() => (document.documentElement.dataset.written || '').includes('### 새 제목'), null, { timeout: 5000 }).catch(() => {});
+const written = await page.evaluate(() => document.documentElement.dataset.written);
+check('auto save after edit', written.includes('### 새 제목\n\n새 **굵은** 문단'));
+const keep = ['---\ntitle: 샘플\n---', '[[TOC]]', '**동일 인물(1인칭)**로', '> [!NOTE]', '*[HTML]: Hyper', 'H~2~O', '|------|---:|------|', '```mermaid', '[^1]: 각주 내용.'];
+check('other blocks kept verbatim', keep.every((k) => written.includes(k)), keep.filter((k) => !written.includes(k)).join(' / '));
+check('only the new lines differ', written.replace('### 새 제목\n\n새 **굵은** 문단\n\n', '') === original);
+await page.screenshot({ path: path.join(outDir, 'editor.png') });
+await page.locator('.mdl-edit-btn').click();
+await page.waitForSelector('article.markdown-body h3#새-제목');
+check('back to view mode renders the edit', (await page.locator('article .markdown-alert').count()) === 2);
 
 // live settings: light theme, plugin off
 await setSettings({ theme: 'light', plugins: { mark: false } });

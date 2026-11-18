@@ -1,5 +1,5 @@
-const INJECTABLE_JS = new Set(['viewer.js', 'mermaid.js']);
-const INJECTABLE_CSS = new Set(['katex.css']);
+const INJECTABLE_JS = new Set(['viewer.js', 'mermaid.js', 'editor.js']);
+const INJECTABLE_CSS = new Set(['katex.css', 'editor.css']);
 
 function stripHash(url) {
   const i = url.indexOf('#');
