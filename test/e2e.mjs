@@ -252,6 +252,44 @@ await page.waitForTimeout(500);
 check('disabled leaves page raw', (await page.locator('article.markdown-body').count()) === 0);
 await setSettings({ enabled: true });
 
+// save helper (native messaging): confirm the location once, then write straight to the opened file
+const { execFileSync } = await import('node:child_process');
+const { readFile: readDisk } = await import('node:fs/promises');
+execFileSync('bash', [path.join(root, 'native/install.sh'), id], {
+  env: { ...process.env, MDLENS_HOSTS_DIR: path.join(work, 'profile', 'NativeMessagingHosts'), MDLENS_HOME: path.join(work, 'helper') },
+});
+const nativeFile = path.join(docs, 'native.md');
+await writeFile(nativeFile, '# 도우미\n\n첫 문단.\n\n* 별표\n* 목록\n');
+const onDisk = () => readDisk(nativeFile, 'utf8');
+const diskHas = async (text) => {
+  for (let i = 0; i < 40; i++) {
+    if ((await onDisk()).includes(text)) return true;
+    await page.waitForTimeout(150);
+  }
+  return false;
+};
+await page.goto(fileUrl('native.md'));
+await page.waitForSelector('article h1');
+await page.locator('.mdl-edit-btn').click();
+await page.waitForSelector('.mdl-editor .ProseMirror h1');
+await page.locator('.mdl-editor .ProseMirror p', { hasText: '첫 문단' }).click();
+await page.keyboard.press('End');
+await page.keyboard.type(' 수정');
+await page.keyboard.press('Control+s');
+await page.waitForSelector('.mdl-native-confirm');
+check('helper: asks to confirm the real path, no picker', (await page.locator('.mdl-native-confirm code').innerText()) === nativeFile);
+check('helper: nothing written before confirming', !(await onDisk()).includes('수정'));
+await page.locator('.mdl-native-confirm button.primary').click();
+await diskHas('첫 문단. 수정');
+check('helper: writes the opened file in place', (await onDisk()) === '# 도우미\n\n첫 문단. 수정\n\n* 별표\n* 목록\n', JSON.stringify(await onDisk()));
+await page.keyboard.type(' 또');
+check('helper: later edits auto save without asking', (await diskHas('수정 또')) && (await page.locator('.mdl-native-confirm').count()) === 0);
+await writeFile(nativeFile, '# 외부 변경\n');
+await page.keyboard.type(' 셋');
+await page.waitForTimeout(2500);
+check('helper: does not overwrite a file changed elsewhere', (await onDisk()) === '# 외부 변경\n' && (await page.locator('.mdl-status-text').innerText()).includes('변경되어'));
+await page.evaluate(() => { window.onbeforeunload = null; });
+
 // options UI
 const opt = await ctx.newPage();
 await opt.setViewportSize({ width: 540, height: 580 });
@@ -261,6 +299,7 @@ for (const [i, name] of ['general', 'appearance', 'plugins'].entries()) {
   await opt.screenshot({ path: path.join(outDir, `options-${name}.png`) });
 }
 await opt.locator('#nav button').nth(0).click();
+check('options: helper detected', (await opt.locator('.helper small').innerText()).startsWith('연결됨'));
 check('options: file access detected', (await opt.locator('.label.link small').innerText()) === '허용됨');
 await opt.locator('#nav button').nth(2).click();
 await opt.locator('.switch input').first().click();

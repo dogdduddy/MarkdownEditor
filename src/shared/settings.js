@@ -17,6 +17,7 @@ export const DEFAULTS = {
   language: 'ko',
   editByDefault: false,
   autoSave: true,
+  saveConfirm: true,
   plantumlPrompt: true,
   // appearance
   fontSize: 2,

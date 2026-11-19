@@ -1,4 +1,5 @@
 const INJECTABLE_JS = new Set(['viewer.js', 'mermaid.js', 'editor.js']);
+const NATIVE_HOST = 'com.mdlens.saver';
 const INJECTABLE_CSS = new Set(['katex.css', 'editor.css']);
 
 function stripHash(url) {
@@ -58,6 +59,25 @@ async function handle(msg, sender) {
       }
       const res = await fetch(msg.url, { cache: 'no-store' });
       return { entries: parseListing(await res.text(), msg.url) };
+    }
+    case 'nativePing': {
+      const r = await chrome.runtime.sendNativeMessage(NATIVE_HOST, { op: 'ping' });
+      if (!r || !r.ok) throw new Error('helper not available');
+      return { version: r.version };
+    }
+    case 'nativeWrite': {
+      // A page may only save itself: the path comes from the tab, not the message.
+      const own = stripHash((sender.tab && sender.tab.url) || '');
+      if (!own.startsWith('file://')) throw new Error('not allowed');
+      const path = decodeURIComponent(new URL(own).pathname);
+      const r = await chrome.runtime.sendNativeMessage(NATIVE_HOST, {
+        op: 'write',
+        path,
+        text: msg.text,
+        base: msg.base,
+        force: !!msg.force,
+      });
+      return { written: !!(r && r.ok), conflict: !!r && r.error === 'conflict', reason: (r && r.message) || '' };
     }
     case 'openOptions': {
       await chrome.runtime.openOptionsPage();

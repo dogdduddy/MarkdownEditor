@@ -35,6 +35,7 @@ let settings = DEFAULTS;
 let t = translator('ko');
 let activeTab = 'general';
 let fileAccess = true;
+let helper = false;
 
 const nav = document.getElementById('nav');
 const content = document.getElementById('content');
@@ -84,6 +85,21 @@ function selectEl(value, options, onChange, disabled) {
 }
 
 // ---------- tabs ----------
+function helperRow() {
+  const command = `bash native/install.sh ${chrome.runtime.id}`;
+  const copy = h('button', { class: 'btn' }, t('opt.copy'));
+  copy.addEventListener('click', async () => {
+    await navigator.clipboard.writeText(command);
+    copy.textContent = t('opt.copied');
+  });
+  return h(
+    'div',
+    { class: 'row stack helper' },
+    h('div', { class: 'label' }, h('b', null, t('opt.helper')), h('small', { class: helper ? '' : 'warn' }, t(helper ? 'opt.helper.on' : 'opt.helper.off'))),
+    helper ? null : h('div', { class: 'command' }, h('code', null, command), copy),
+  );
+}
+
 function general() {
   const interval = h('input', {
     type: 'number', min: 0.5, max: 600, step: 0.5, value: settings.refreshInterval, disabled: !settings.autoRefresh,
@@ -110,6 +126,8 @@ function general() {
     toggleRow('renderTxt'),
     toggleRow('editByDefault'),
     toggleRow('autoSave'),
+    toggleRow('saveConfirm'),
+    helperRow(),
     toggleRow('autoRefresh'),
     h('div', { class: 'row' }, label('opt.refreshInterval'), h('div', { class: 'control' }, interval, h('span', { class: 'unit' }, t('opt.sec')))),
     toggleRow('charsetCompat'),
@@ -242,6 +260,7 @@ function draw() {
   if (new URLSearchParams(location.search).has('popup')) document.body.classList.add('popup');
   settings = await loadSettings();
   fileAccess = await new Promise((r) => chrome.extension.isAllowedFileSchemeAccess(r));
+  helper = await chrome.runtime.sendNativeMessage('com.mdlens.saver', { op: 'ping' }).then((r) => !!(r && r.ok), () => false);
   draw();
   // Stay in sync with changes made from the viewer (zen mode, etc.).
   onSettingsChanged((next) => {
