@@ -107,9 +107,3 @@ textarea {
 .btn.danger { background: var(--danger); color: #fff; }
 .about p { margin: 0 0 12px; }
 .about .muted { color: var(--muted); }
-.label small.warn { color: var(--danger); }
-.command { display: flex; align-items: center; gap: 8px; }
-.command code {
-  flex: 1; min-width: 0; padding: 9px 12px; border-radius: 8px; background: var(--bg-soft);
-  font: 12.5px/1.4 ui-monospace, "SF Mono", Menlo, Consolas, monospace; overflow-wrap: anywhere; user-select: all;
-}

@@ -712,25 +712,7 @@ const clean = (s) => s.replace(/^﻿/, '');
   let outlineTimer = null;
   let saveTimer = null;
   let savePrompt = null;
-  let savedOnce = false;
   const canPick = typeof window.showOpenFilePicker === 'function';
-  // Save helper (native messaging host): writes straight to the opened file.
-  let native = null; // null = not checked yet
-  let nativeConfirmed = false;
-  const CONFIRMED_KEY = 'savePaths';
-
-  async function nativeReady() {
-    if (!isFile) return false;
-    if (native === null) {
-      native = !!(await send({ type: 'nativePing' })).ok;
-      if (native) {
-        const stored = (await chrome.storage.local.get(CONFIRMED_KEY))[CONFIRMED_KEY] || [];
-        nativeConfirmed = stored.includes(pageUrl());
-      }
-    }
-    return native;
-  }
-  const savesSilently = () => !!fileHandle || (native && (nativeConfirmed || !settings.saveConfirm));
 
   function updateStatus(message) {
     status.hidden = mode !== 'edit' && !dirty;
@@ -740,8 +722,6 @@ const clean = (s) => s.replace(/^﻿/, '');
       if (editor && !editor.lossless) text = t('edit.lossy');
       else if (dirty) text = t('edit.dirty');
       else if (fileHandle) text = `${t('edit.saved')} · ${fileHandle.name}`;
-      else if (native && savedOnce) text = `${t('edit.saved')} · ${fileName}`;
-      else if (native) text = t('edit.nativeHint');
       else text = t(canPick ? 'edit.pickHint' : 'edit.downloadHint');
     }
     statusText.textContent = text;
@@ -760,7 +740,7 @@ const clean = (s) => s.replace(/^﻿/, '');
     updateStatus();
     clearTimeout(outlineTimer);
     outlineTimer = setTimeout(editorHeadings, 300);
-    if (settings.autoSave && savesSilently() && editor && editor.lossless) {
+    if (settings.autoSave && fileHandle && editor && editor.lossless) {
       clearTimeout(saveTimer);
       saveTimer = setTimeout(() => save(false), 1000);
     }
@@ -862,7 +842,7 @@ const clean = (s) => s.replace(/^﻿/, '');
     }
     entering = false;
     try {
-      if (!(await nativeReady()) && !fileHandle) fileHandle = await findHandle(false);
+      if (!fileHandle) fileHandle = await findHandle(false);
     } catch {}
     updateStatus();
   }
@@ -1010,81 +990,16 @@ const clean = (s) => s.replace(/^﻿/, '');
         { class: 'mdl-notice-actions' },
         h('button', { class: 'primary', onclick: pickFile }, t('edit.pickFile')),
         typeof window.showDirectoryPicker === 'function' && h('button', { class: 'mdl-pick-folder', onclick: pickFolder }, t('edit.pickFolder')),
-        isFile && h('button', { onclick: () => send({ type: 'openOptions' }) }, t('edit.helperHow')),
         h('button', { class: 'link', onclick: closeSavePrompt }, t('puml.close')),
       ),
     );
     document.body.append(savePrompt);
   }
 
-  // With the helper installed the location is already known: just confirm it.
-  function showNativeConfirm() {
-    closeSavePrompt();
-    savePrompt = h(
-      'div',
-      { class: 'mdl-notice mdl-save-prompt mdl-native-confirm' },
-      h('div', { class: 'mdl-notice-text' }, h('b', null, t('edit.confirmTitle')), h('code', null, decode(location.pathname))),
-      h(
-        'div',
-        { class: 'mdl-notice-actions' },
-        h('button', {
-          class: 'primary',
-          onclick: async () => {
-            nativeConfirmed = true;
-            closeSavePrompt();
-            // Hand the keyboard back to the document so typing continues where it was.
-            const pm = editorHost.querySelector('.ProseMirror');
-            if (pm) pm.focus();
-            const stored = (await chrome.storage.local.get(CONFIRMED_KEY))[CONFIRMED_KEY] || [];
-            if (!stored.includes(pageUrl())) {
-              await chrome.storage.local.set({ [CONFIRMED_KEY]: [...stored, pageUrl()].slice(-500) });
-            }
-            save(true);
-          },
-        }, t('edit.save')),
-        h('button', { class: 'link', onclick: closeSavePrompt }, t('opt.cancel')),
-      ),
-    );
-    document.body.append(savePrompt);
-  }
-
-  async function nativeSave(text, interactive) {
-    if (!nativeConfirmed && settings.saveConfirm) {
-      if (interactive) showNativeConfirm();
-      return;
-    }
-    saving = true;
-    updateStatus(t('edit.saving'));
-    let r = await send({ type: 'nativeWrite', text, base: diskText });
-    if (r.ok && r.conflict) {
-      // Someone else changed the file since it was loaded: never overwrite silently.
-      if (!interactive || !window.confirm(t('edit.conflict'))) {
-        saving = false;
-        updateStatus(t('edit.conflictStatus'));
-        return;
-      }
-      r = await send({ type: 'nativeWrite', text, base: diskText, force: true });
-    }
-    saving = false;
-    if (r.ok && r.written) {
-      source = text;
-      diskText = text;
-      savedOnce = true;
-      dirty = currentText() !== text;
-      updateStatus();
-    } else {
-      updateStatus(`${t('edit.failed')}: ${r.reason || r.error || ''}`);
-    }
-  }
-
   // interactive = started by the user (button / shortcut); may open a picker.
   async function save(interactive) {
     if (saving) return;
     const text = currentText();
-    if (!fileHandle && (await nativeReady())) {
-      await nativeSave(text, interactive);
-      return;
-    }
     if (!canPick) {
       if (!interactive) return;
       const a = h('a', { href: URL.createObjectURL(new Blob([text], { type: 'text/markdown' })), download: fileName });

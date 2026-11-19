@@ -35,20 +35,6 @@ Finder에서 `.md` 파일을 Chrome으로 열면 목차·폴더 탐색이 붙은
 
 PlantUML은 다이어그램 소스를 plantuml.com 서버로 보내 렌더링하므로 기본값이 꺼짐입니다. 그 외 모든 처리는 브라우저 안에서만 이뤄집니다.
 
-## 저장 도우미 (선택)
-
-Chrome은 확장 프로그램에 로컬 파일 쓰기 권한을 주지 않아서, 기본 상태에서는 처음 저장할 때 원본 파일이나 폴더를 직접 지정해야 합니다. 저장 도우미를 설치하면 위치를 고르지 않고 "이 파일에 저장할까요?" 확인만으로 열려 있는 원본 파일에 바로 저장됩니다.
-
-```bash
-bash native/install.sh <확장 프로그램 ID>
-```
-
-- 확장 프로그램 ID가 채워진 명령은 MD Lens 설정 → 일반 → 저장 도우미에서 복사할 수 있습니다.
-- `python3`가 필요합니다. 없으면 `xcode-select --install` 로 설치합니다.
-- 도우미는 MD Lens 확장만 호출할 수 있고, 이미 존재하는 Markdown/텍스트 파일을 덮어쓰는 일만 합니다. 새 파일은 만들지 않습니다.
-- 문서를 연 뒤 다른 프로그램이 파일을 바꿨다면 자동 저장하지 않고 덮어쓸지 묻습니다.
-- 확장 프로그램 ID가 바뀌면(다른 폴더에서 다시 로드한 경우) 다시 설치해야 합니다. 제거는 `bash native/uninstall.sh`.
-
 ## 개발
 
 ```bash
@@ -63,6 +49,5 @@ npm test        # Chromium에 dist/를 로드해 E2E 검증 (Playwright 필요)
 - `src/viewer/` — 렌더링, 목차, 폴더 탐색, 스타일, 에디터(`editor-entry.js`, Milkdown Crepe)
 - `src/options/` — 설정 화면(팝업 겸용)
 - `src/shared/` — 설정 기본값, 다국어(한국어/영어)
-- `native/` — 저장 도우미(Chrome Native Messaging 호스트)와 설치 스크립트
 
 코드를 고친 뒤에는 `npm run build` 후 `chrome://extensions`에서 새로고침 버튼을 누르면 됩니다.
