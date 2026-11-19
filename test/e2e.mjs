@@ -240,6 +240,7 @@ await page.evaluate(() => { window.onbeforeunload = null; });
 // zen + disabled
 await setSettings({ zen: true });
 await page.waitForFunction(() => document.documentElement.classList.contains('mdl-zen'));
+await page.waitForTimeout(400); // sidebar slides out with a transition
 check('zen hides sidebar', !(await page.locator('.mdl-sidebar').isVisible()) || (await page.locator('.mdl-sidebar').boundingBox()).x < 0);
 await page.keyboard.press('Escape');
 await page.waitForFunction(() => !document.documentElement.classList.contains('mdl-zen'));

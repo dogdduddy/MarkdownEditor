@@ -67,11 +67,28 @@ await statics();
 await build(cssOptions);
 // The editor is built separately: KaTeX (used for its math blocks) refuses to
 // run in quirks mode, which is what Chrome uses for raw text documents.
+// mdast-util-to-markdown-cjk-friendly reads parent.children without the
+// `|| []` guard the stock serialiser has, so an empty table cell or heading
+// (which the editor emits without a children array) crashed the editor.
+const patchCjkPhrasing = {
+  name: 'patch-cjk-phrasing',
+  setup(b) {
+    b.onLoad({ filter: /mdast-util-to-markdown-cjk-friendly[\\/]dist[\\/].*\.m?js$/ }, async (args) => {
+      const src = await readFile(args.path, 'utf8');
+      const needle = 'const children = parent.children;';
+      if (!src.includes(needle)) return { contents: src, loader: 'js' };
+      patchCjkPhrasing.applied = true;
+      return { contents: src.replace(needle, 'const children = parent.children || [];'), loader: 'js' };
+    });
+  },
+};
+
 const { entryPoints } = options;
 const editorOptions = {
   ...options,
   entryPoints: { editor: 'src/viewer/editor-entry.js' },
   define: { 'document.compatMode': '"CSS1Compat"' },
+  plugins: [patchCjkPhrasing],
 };
 delete entryPoints.editor;
 
@@ -82,4 +99,5 @@ if (watch) {
 } else {
   await build(options);
   await build(editorOptions);
+  if (!patchCjkPhrasing.applied) throw new Error('cjk phrasing patch did not apply; check the dependency');
 }
